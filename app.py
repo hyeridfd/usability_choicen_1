@@ -973,44 +973,39 @@ else:
                     col1, col2, col3 = st.columns([1, 2, 1])
                     with col2:
                         if st.button("📤 제출하기", use_container_width=True):
-                            submit_time = get_kst_now()
-                            duration = (submit_time - st.session_state.start_time).total_seconds()
+                            # --- 필수: 여기서 모두 지역 변수로 만든다 ---
+                            submit_time  = get_kst_now()
+                            started_at   = st.session_state.start_time or submit_time
+                            duration_sec = max(0, int((submit_time - started_at).total_seconds()))
+                            username     = st.session_state.username
+                            safe_meal    = st.session_state.meal_type
+                            save_name    = f"{username}_{safe_meal}.xlsx"
                 
-                            meal_type = st.session_state.meal_type
-                            username  = st.session_state.username
-
-                            safe_meal = st.session_state.meal_type
-                            save_name = f"{username}_{safe_meal}.xlsx"
-                
-                            # 1) 파일 바이트
+                            # 파일 바이트
                             file_bytes = uploaded_file.read()
                 
-                            # 2) Supabase 업로드(가능하면) + storage_path 확보
+                            # (선택) Supabase 업로드 시도 후 storage_path 설정
                             storage_path = ""
-                            sb = get_supabase()
-                            supabase_ok = sb is not None
-                            if supabase_ok:
+                            sb = get_supabase() if "get_supabase" in globals() else None
+                            if sb:
                                 try:
-                                    storage_path = upload_to_storage(file_bytes, username, meal_type)
+                                    storage_path = upload_to_storage(file_bytes, username, safe_meal)
                                 except Exception as e:
-                                    supabase_ok = False
                                     st.warning(f"Supabase 업로드 실패(로컬 저장으로 대체): {e}")
                 
-                            # 3) 로컬에도 저장(백업/폴백)
-                            safe_meal = meal_type
-                            save_name = f"{username}_{safe_meal}.xlsx"
+                            # 로컬에도 저장(폴백/백업)
                             file_path = os.path.join(UPLOAD_FOLDER, save_name)
                             with open(file_path, "wb") as f:
                                 f.write(file_bytes)
                 
-                            # 4) 로그(로컬 CSV) 갱신 — 기존 형식 유지
+                            # 로그 CSV 갱신
                             log_row = {
                                 "사용자": username,
-                                "시작시간": st.session_state.start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                                "시작시간": started_at.strftime('%Y-%m-%d %H:%M:%S'),
                                 "제출시간": submit_time.strftime('%Y-%m-%d %H:%M:%S'),
-                                "소요시간(초)": int(duration),
+                                "소요시간(초)": duration_sec,
                                 "식단표종류": safe_meal,
-                                "파일경로": file_path if not storage_path else storage_path  # Supabase 경로 우선
+                                "파일경로": storage_path or file_path,  # Supabase 경로 우선
                             }
                             if os.path.exists(LOG_FILE):
                                 existing = pd.read_csv(LOG_FILE)
@@ -1022,36 +1017,30 @@ else:
                                 log_df = pd.DataFrame([log_row])
                             log_df.to_csv(LOG_FILE, index=False)
                 
-                            # 5) Supabase DB에도 기록(가능하면)
-                            if supabase_ok and storage_path:
+                            # (선택) Supabase DB 로그
+                            if sb and storage_path:
                                 try:
-                                    insert_row_kor(
-                                        username=username,
-                                        started_at=st.session_state.start_time,
-                                        submitted_at=submit_time,
-                                        duration_sec=int(duration),
-                                        meal_type=meal_type,
-                                        storage_path=storage_path,
-                                        original_name=uploaded_file.name,
-                                    )
+                                    insert_row_kor(username, started_at, submit_time, duration_sec, safe_meal, storage_path, uploaded_file.name)
                                 except Exception as e:
-                                    st.warning(f"Supabase 로그 적재 실패(로컬 CSV만 저장됨): {e}")
+                                    st.warning(f"Supabase 로그 적재 실패: {e}")
+                
+                            # 완료 메시지 (여기서 지역 변수만 사용!)
+                            st.success("🎉 제출이 완료되었습니다!")
+                            st.markdown(f"""
+                            <div style="background: #e8f5e8; padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
+                                <h4>📋 제출 완료 요약</h4>
+                                <p><strong>👤 사용자:</strong> {username}</p>
+                                <p><strong>🧾 식단표:</strong> {safe_meal}</p>
+                                <p><strong>⏰ 소요 시간:</strong> {duration_sec}초</p>
+                                <p><strong>📅 제출 시간:</strong> {submit_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                                <p><strong>💾 저장 파일명:</strong> {save_name}</p>
+                                <p><strong>🗄️ 저장 위치:</strong> {storage_path or file_path}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                
+                            # 세션 리셋
+                            st.session_state.start_time = None
 
-            # 6) UI
-            username = st.session_state.username  # ← 추가
-            st.success("🎉 제출이 완료되었습니다!")
-            st.markdown(f"""
-                <div style="background: #e8f5e8; padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
-                    <h4>📋 제출 완료 요약</h4>
-                    <p><strong>👤 사용자:</strong> {st.session_state.username}</p>
-                    <p><strong>🧾 식단표:</strong> {st.session_state.meal_type}</p>
-                    <p><strong>⏰ 소요 시간:</strong> {int(duration)}초</p>
-                    <p><strong>📅 제출 시간:</strong> {submit_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    <p><strong>💾 저장 파일명:</strong> {save_name}</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-            st.session_state.start_time = None
 
     # 탭 2: 메뉴 관리
     elif selected_tab == "🔍 메뉴 관리":
