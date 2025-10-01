@@ -978,6 +978,9 @@ else:
                 
                             meal_type = st.session_state.meal_type
                             username  = st.session_state.username
+
+                            safe_meal = st.session_state.meal_type
+                            save_name = f"{username}_{safe_meal}.xlsx"
                 
                             # 1) 파일 바이트
                             file_bytes = uploaded_file.read()
@@ -1041,7 +1044,7 @@ else:
                 <div style="background: #e8f5e8; padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
                     <h4>📋 제출 완료 요약</h4>
                     <p><strong>👤 사용자:</strong> {st.session_state.username}</p>
-                    <p><strong>🧾 식단표:</strong> {safe_meal}</p>
+                    <p><strong>🧾 식단표:</strong> {st.session_state.meal_type}</p>
                     <p><strong>⏰ 소요 시간:</strong> {int(duration)}초</p>
                     <p><strong>📅 제출 시간:</strong> {submit_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
                     <p><strong>💾 저장 파일명:</strong> {save_name}</p>
