@@ -9,6 +9,74 @@ import os, base64
 import streamlit as st
 import streamlit.components.v1 as components
 
+
+# ===== Supabase helpers (ADD) ======================================
+from supabase import create_client, Client
+import time
+
+@st.cache_resource
+def get_supabase() -> Client | None:
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+        return create_client(url, key)
+    except Exception:
+        # Secrets 미설정 시 None 반환 → 자동 폴백
+        return None
+
+def _storage_path(username: str, meal_type: str) -> str:
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    return f"uploads/{username}/{time.strftime('%Y')}/{time.strftime('%m')}/{username}_{meal_type}_{ts}.xlsx"
+
+def upload_to_storage(file_bytes: bytes, username: str, meal_type: str) -> str:
+    sb = get_supabase()
+    if sb is None:
+        raise RuntimeError("Supabase client not configured")
+    bucket = st.secrets["SUPABASE_BUCKET"]
+    path = _storage_path(username, meal_type)
+    sb.storage.from_(bucket).upload(
+        path=path,
+        file=file_bytes,
+        file_options={
+            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "upsert": True
+        },
+    )
+    return path
+
+def insert_row_kor(username: str, started_at: datetime, submitted_at: datetime,
+                   duration_sec: int, meal_type: str, storage_path: str, original_name: str):
+    sb = get_supabase()
+    if sb is None:
+        raise RuntimeError("Supabase client not configured")
+    row = {
+        "사용자": username,
+        "시작시간": started_at.isoformat(),
+        "제출시간": submitted_at.isoformat(),
+        "소요시간(초)": int(duration_sec),
+        "식단표종류": meal_type,
+        "파일경로": storage_path,
+        "원본파일명": original_name,
+    }
+    sb.table("submissions").insert(row).execute()
+
+def fetch_logs_df() -> pd.DataFrame:
+    sb = get_supabase()
+    if sb is None:
+        return pd.DataFrame()
+    res = sb.table("submissions").select("*").order("제출시간", desc=True).execute()
+    return pd.DataFrame(res.data or [])
+
+def make_signed_url(storage_path: str, expire_seconds: int = 3600) -> str:
+    sb = get_supabase()
+    if sb is None:
+        return ""
+    bucket = st.secrets["SUPABASE_BUCKET"]
+    r = sb.storage.from_(bucket).create_signed_url(storage_path, expire_seconds)
+    return r.get("signedURL") or r.get("signed_url") or ""
+# ===================================================================
+
+
 def render_index_html_with_injected_xlsx(
     html_height: int = 900,
     xlsx_candidates=None,
@@ -726,66 +794,80 @@ else:
             </div>
             """, unsafe_allow_html=True)
             
-            # 통계 카드들
-            if os.path.exists(LOG_FILE):
-                df = pd.read_csv(LOG_FILE)
+            # 통계 카드 + 표
+            sb = get_supabase()
+            df_db = fetch_logs_df() if sb else pd.DataFrame()
+            
+            if not df_db.empty:
+                # Supabase 기준 통계
                 col1, col2, col3, col4 = st.columns(4)
-                
                 with col1:
-                    st.markdown(f"""<div class="stat-card"><div class="stat-number">{len(df)}</div><div class="stat-label">총 제출 수</div></div>""", unsafe_allow_html=True)
+                    st.markdown(f"""<div class="stat-card"><div class="stat-number">{len(df_db)}</div><div class="stat-label">총 제출 수</div></div>""", unsafe_allow_html=True)
                 with col2:
-                    st.markdown(f"""<div class="stat-card"><div class="stat-number">{df['사용자'].nunique()}</div><div class="stat-label">참여 사용자</div></div>""", unsafe_allow_html=True)
+                    st.markdown(f"""<div class="stat-card"><div class="stat-number">{df_db['사용자'].nunique()}</div><div class="stat-label">참여 사용자</div></div>""", unsafe_allow_html=True)
                 with col3:
-                    avg_time = int(df['소요시간(초)'].mean()) if '소요시간(초)' in df.columns else 0
+                    avg_time = int(df_db["소요시간(초)"].mean()) if "소요시간(초)" in df_db.columns else 0
                     st.markdown(f"""<div class="stat-card"><div class="stat-number">{avg_time}초</div><div class="stat-label">평균 소요시간</div></div>""", unsafe_allow_html=True)
                 with col4:
                     today_str = datetime.now().strftime('%Y-%m-%d')
-                    today_count = len(df[df['제출시간'].astype(str).str.contains(today_str)])
+                    today_count = df_db["제출시간"].astype(str).str.contains(today_str).sum()
                     st.markdown(f"""<div class="stat-card"><div class="stat-number">{today_count}</div><div class="stat-label">오늘 제출</div></div>""", unsafe_allow_html=True)
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                # 관리 버튼들
-                col1, col2, col3 = st.columns([1, 1, 2])
-                with col1:
-                    st.markdown('<div class="danger-button">', unsafe_allow_html=True)
-                    if st.button("🗑️ 기록 전체 삭제", use_container_width=True):
-                        if os.path.exists(LOG_FILE):
-                            os.remove(LOG_FILE)
-                            st.success("✅ 로그 파일이 삭제되었습니다.")
-                        else:
-                            st.warning("⚠️ 삭제할 로그 파일이 없습니다.")
-                    st.markdown('</div>', unsafe_allow_html=True)
-                
-                # 제출 기록 테이블
+            
                 st.markdown("""<div class="card"><h3>📊 제출 기록</h3></div>""", unsafe_allow_html=True)
-                st.dataframe(df, use_container_width=True)
-                
+                show_cols = ["사용자","시작시간","제출시간","소요시간(초)","식단표종류","파일경로","원본파일명"]
+                st.dataframe(df_db[[c for c in show_cols if c in df_db.columns]], use_container_width=True)
+            
                 st.markdown("<br>", unsafe_allow_html=True)
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    user_list = df["사용자"].unique().tolist()
-                    selected_user = st.selectbox("👤 사용자 선택", user_list)
-                
-                with col2:
-                    pattern = os.path.join(UPLOAD_FOLDER, f"{selected_user}_식단표*.xlsx")
-                    files = sorted(glob.glob(pattern))
-                    if files:
-                        for path in files:
-                            base = os.path.basename(path)
-                            label = f"📥 {os.path.splitext(base)[0]} 다운로드"
-                            with open(path, "rb") as f:
-                                st.download_button(
-                                    label=label,
-                                    data=f,
-                                    file_name=base,
-                                    use_container_width=True
-                                )
+                users = df_db["사용자"].unique().tolist()
+                sel_user = st.selectbox("👤 사용자 선택", users)
+            
+                user_rows = df_db[df_db["사용자"] == sel_user].sort_values("제출시간", ascending=False)
+                for _, r in user_rows.iterrows():
+                    label = f"📥 {r.get('원본파일명','제출파일')} ({r['식단표종류']} / {str(r['제출시간'])[:19]})"
+                    signed = make_signed_url(r["파일경로"], expire_seconds=3600)
+                    if signed:
+                        st.link_button(label, url=signed, use_container_width=True)
                     else:
-                        st.warning(f"⚠️ {selected_user}님의 제출 파일이 존재하지 않습니다.")
+                        st.warning(f"URL 생성 실패 또는 로컬 파일만 존재: {r['파일경로']}")
             else:
-                st.info("📝 제출 기록이 아직 없습니다.")
+                # 폴백: 기존 log.csv + 로컬 다운로드
+                if os.path.exists(LOG_FILE):
+                    df = pd.read_csv(LOG_FILE)
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.markdown(f"""<div class="stat-card"><div class="stat-number">{len(df)}</div><div class="stat-label">총 제출 수</div></div>""", unsafe_allow_html=True)
+                    with col2:
+                        st.markdown(f"""<div class="stat-card"><div class="stat-number">{df['사용자'].nunique()}</div><div class="stat-label">참여 사용자</div></div>""", unsafe_allow_html=True)
+                    with col3:
+                        avg_time = int(df['소요시간(초)'].mean()) if '소요시간(초)' in df.columns else 0
+                        st.markdown(f"""<div class="stat-card"><div class="stat-number">{avg_time}초</div><div class="stat-label">평균 소요시간</div></div>""", unsafe_allow_html=True)
+                    with col4:
+                        today_str = datetime.now().strftime('%Y-%m-%d')
+                        today_count = len(df[df['제출시간'].astype(str).str.contains(today_str)])
+                        st.markdown(f"""<div class="stat-card"><div class="stat-number">{today_count}</div><div class="stat-label">오늘 제출</div></div>""", unsafe_allow_html=True)
+            
+                    st.markdown("""<div class="card"><h3>📊 제출 기록</h3></div>""", unsafe_allow_html=True)
+                    st.dataframe(df, use_container_width=True)
+            
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        user_list = df["사용자"].unique().tolist()
+                        selected_user = st.selectbox("👤 사용자 선택", user_list)
+                    with col2:
+                        pattern = os.path.join(UPLOAD_FOLDER, f"{selected_user}_식단표*.xlsx")
+                        files = sorted(glob.glob(pattern))
+                        if files:
+                            for path in files:
+                                base = os.path.basename(path)
+                                label = f"📥 {os.path.splitext(base)[0]} 다운로드"
+                                with open(path, "rb") as f:
+                                    st.download_button(label=label, data=f, file_name=base, use_container_width=True)
+                        else:
+                            st.warning(f"⚠️ {selected_user}님의 제출 파일이 존재하지 않습니다.")
+                else:
+                    st.info("📝 제출 기록이 아직 없습니다.")
+
         
         # 사용자 페이지
         else:
@@ -887,30 +969,46 @@ else:
                 
                 if uploaded_file:
                     st.success(f"✅ 파일 선택됨: {uploaded_file.name}")
-                    
+                
                     col1, col2, col3 = st.columns([1, 2, 1])
                     with col2:
                         if st.button("📤 제출하기", use_container_width=True):
                             submit_time = get_kst_now()
                             duration = (submit_time - st.session_state.start_time).total_seconds()
-                            
-                            safe_meal = st.session_state.meal_type
-                            save_name = f"{st.session_state.username}_{safe_meal}.xlsx"
+                
+                            meal_type = st.session_state.meal_type
+                            username  = st.session_state.username
+                
+                            # 1) 파일 바이트
+                            file_bytes = uploaded_file.read()
+                
+                            # 2) Supabase 업로드(가능하면) + storage_path 확보
+                            storage_path = ""
+                            sb = get_supabase()
+                            supabase_ok = sb is not None
+                            if supabase_ok:
+                                try:
+                                    storage_path = upload_to_storage(file_bytes, username, meal_type)
+                                except Exception as e:
+                                    supabase_ok = False
+                                    st.warning(f"Supabase 업로드 실패(로컬 저장으로 대체): {e}")
+                
+                            # 3) 로컬에도 저장(백업/폴백)
+                            safe_meal = meal_type
+                            save_name = f"{username}_{safe_meal}.xlsx"
                             file_path = os.path.join(UPLOAD_FOLDER, save_name)
-                            
                             with open(file_path, "wb") as f:
-                                f.write(uploaded_file.getbuffer())
-                            
-                            # 로그 데이터 구성
+                                f.write(file_bytes)
+                
+                            # 4) 로그(로컬 CSV) 갱신 — 기존 형식 유지
                             log_row = {
-                                "사용자": st.session_state.username,
+                                "사용자": username,
                                 "시작시간": st.session_state.start_time.strftime('%Y-%m-%d %H:%M:%S'),
                                 "제출시간": submit_time.strftime('%Y-%m-%d %H:%M:%S'),
                                 "소요시간(초)": int(duration),
                                 "식단표종류": safe_meal,
-                                "파일경로": file_path
+                                "파일경로": file_path if not storage_path else storage_path  # Supabase 경로 우선
                             }
-                            
                             if os.path.exists(LOG_FILE):
                                 existing = pd.read_csv(LOG_FILE)
                                 for col in ["파일경로", "식단표종류"]:
@@ -919,23 +1017,38 @@ else:
                                 log_df = pd.concat([existing, pd.DataFrame([log_row])], ignore_index=True)
                             else:
                                 log_df = pd.DataFrame([log_row])
-                            
                             log_df.to_csv(LOG_FILE, index=False)
-                            
-                            st.success("🎉 제출이 완료되었습니다!")
-                            st.markdown(f"""
-                            <div style="background: #e8f5e8; padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
-                                <h4>📋 제출 완료 요약</h4>
-                                <p><strong>👤 사용자:</strong> {st.session_state.username}</p>
-                                <p><strong>🧾 식단표:</strong> {safe_meal}</p>
-                                <p><strong>⏰ 소요 시간:</strong> {int(duration)}초</p>
-                                <p><strong>📅 제출 시간:</strong> {submit_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                                <p><strong>💾 저장 파일명:</strong> {save_name}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            st.session_state.start_time = None
-    
+                
+                            # 5) Supabase DB에도 기록(가능하면)
+                            if supabase_ok and storage_path:
+                                try:
+                                    insert_row_kor(
+                                        username=username,
+                                        started_at=st.session_state.start_time,
+                                        submitted_at=submit_time,
+                                        duration_sec=int(duration),
+                                        meal_type=meal_type,
+                                        storage_path=storage_path,
+                                        original_name=uploaded_file.name,
+                                    )
+                                except Exception as e:
+                                    st.warning(f"Supabase 로그 적재 실패(로컬 CSV만 저장됨): {e}")
+
+            # 6) UI
+            st.success("🎉 제출이 완료되었습니다!")
+            st.markdown(f"""
+            <div style="background:#e8f5e8;padding:1.5rem;border-radius:10px;margin:1rem 0;">
+                <h4>📋 제출 완료 요약</h4>
+                <p><strong>👤 사용자:</strong> {username}</p>
+                <p><strong>🧾 식단표:</strong> {safe_meal}</p>
+                <p><strong>⏰ 소요 시간:</strong> {int(duration)}초</p>
+                <p><strong>📅 제출 시간:</strong> {submit_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                <p><strong>🗄️ 저장 위치:</strong> {storage_path or file_path}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.session_state.start_time = None
+
     # 탭 2: 메뉴 관리
     elif selected_tab == "🔍 메뉴 관리":
         # st.markdown("""
