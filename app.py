@@ -32,15 +32,19 @@ def upload_to_storage(file_bytes: bytes, username: str, meal_type: str) -> str:
     sb = get_supabase()
     if sb is None:
         raise RuntimeError("Supabase client not configured")
+
     bucket = st.secrets["SUPABASE_BUCKET"]
     path = _storage_path(username, meal_type)
+
+    # ✅ 옵션 값을 문자열로, 키는 contentType / upsert 사용
     sb.storage.from_(bucket).upload(
         path=path,
-        file=file_bytes,
+        file=file_bytes,  # bytes 또는 파일 객체
         file_options={
-            "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "upsert": True
-        },
+            "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "cacheControl": "3600",
+            "upsert": "true"
+        }
     )
     return path
 
