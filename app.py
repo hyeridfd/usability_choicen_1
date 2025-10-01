@@ -1035,17 +1035,18 @@ else:
                                     st.warning(f"Supabase 로그 적재 실패(로컬 CSV만 저장됨): {e}")
 
             # 6) UI
+            username = st.session_state.username  # ← 추가
             st.success("🎉 제출이 완료되었습니다!")
             st.markdown(f"""
-            <div style="background:#e8f5e8;padding:1.5rem;border-radius:10px;margin:1rem 0;">
-                <h4>📋 제출 완료 요약</h4>
-                <p><strong>👤 사용자:</strong> {username}</p>
-                <p><strong>🧾 식단표:</strong> {safe_meal}</p>
-                <p><strong>⏰ 소요 시간:</strong> {int(duration)}초</p>
-                <p><strong>📅 제출 시간:</strong> {submit_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
-                <p><strong>🗄️ 저장 위치:</strong> {storage_path or file_path}</p>
-            </div>
-            """, unsafe_allow_html=True)
+                <div style="background: #e8f5e8; padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
+                    <h4>📋 제출 완료 요약</h4>
+                    <p><strong>👤 사용자:</strong> {st.session_state.username}</p>
+                    <p><strong>🧾 식단표:</strong> {safe_meal}</p>
+                    <p><strong>⏰ 소요 시간:</strong> {int(duration)}초</p>
+                    <p><strong>📅 제출 시간:</strong> {submit_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    <p><strong>💾 저장 파일명:</strong> {save_name}</p>
+                </div>
+                """, unsafe_allow_html=True)
 
             st.session_state.start_time = None
 
