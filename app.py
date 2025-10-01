@@ -8,6 +8,7 @@ import base64
 import os, base64
 import streamlit as st
 import streamlit.components.v1 as components
+import re, unicodedata, time
 
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -26,9 +27,24 @@ def get_supabase() -> Client | None:
         # Secrets 미설정 시 None 반환 → 자동 폴백
         return None
 
+
+def _ascii_slug(s: str) -> str:
+    # 한글/유니코드 제거 + 안전 문자만 남기기
+    s = (s or "").strip()
+    s = unicodedata.normalize("NFKD", s)
+    s = s.encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"[^A-Za-z0-9._-]+", "-", s)
+    s = s.strip("-._")
+    return s or "file"
+
 def _storage_path(username: str, meal_type: str) -> str:
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    return f"uploads/{username}/{time.strftime('%Y')}/{time.strftime('%m')}/{username}_{meal_type}_{ts}.xlsx"
+    u = _ascii_slug(username)           # ex) SR11
+    m = _ascii_slug(meal_type)          # ex) sikdanA  (식단표A → sikdanA 처럼 ASCII만 남음)
+    ts = time.strftime("%Y%m%d-%H%M%S") # ex) 20251001-122941
+    fname = f"{u}_{m}_{ts}.xlsx"
+    # 절대 경로 금지, 슬래시/공백/백슬래시 없음 보장
+    return f"uploads/{u}/{time.strftime('%Y')}/{time.strftime('%m')}/{fname}"
+
 
 def upload_to_storage(file_bytes: bytes, username: str, meal_type: str) -> str:
     sb = get_supabase()
