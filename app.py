@@ -9,6 +9,8 @@ import os, base64
 import streamlit as st
 import streamlit.components.v1 as components
 
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 # ===== Supabase helpers (ADD) ======================================
 from supabase import create_client, Client
@@ -597,7 +599,7 @@ user_dict = {
 }
 
 def get_kst_now():
-    return datetime.utcnow() + timedelta(hours=9)
+    return datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Seoul"))
 
 # 템플릿 파일 다운로드 함수
 import requests
