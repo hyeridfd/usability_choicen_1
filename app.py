@@ -34,11 +34,10 @@ def get_supabase() -> Client | None:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
         return create_client(url, key)
-sb = get_supabase(_ver=st.secrets.get("SUPABASE_CLIENT_VERSION", "v1"))  # secrets에서 값만 바꿔도 재생성
     except Exception:
         # Secrets 미설정 시 None 반환 → 자동 폴백
         return None
-
+sb = get_supabase(_ver=st.secrets.get("SUPABASE_CLIENT_VERSION", "v1"))  # secrets에서 값만 바꿔도 재생성
 
 def _ascii_slug(s: str) -> str:
     # 한글/유니코드 제거 + 안전 문자만 남기기
