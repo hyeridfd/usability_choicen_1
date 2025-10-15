@@ -27,7 +27,7 @@ def peek_role(jwt: str):
     return data.get("role"), data
 
 role, _ = peek_role(st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", ""))
-st.write("JWT role =", role)   # 👉 반드시 'service_role' 이어야 합니다
+#st.write("JWT role =", role)   # 👉 반드시 'service_role' 이어야 합니다
 
 
 # ✅ 캐시 무효화 가능한 버전 파라미터 추가
