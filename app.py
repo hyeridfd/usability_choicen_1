@@ -5,6 +5,7 @@ import os
 import glob
 import time
 import base64, json
+import tempfile
 
 import os, base64
 import streamlit as st
@@ -56,8 +57,8 @@ def _storage_path(username: str, meal_type: str) -> str:
     m = _ascii_slug(meal_type)
     ts = time.strftime("%Y%m%d-%H%M%S")
     fname = f"{u}_{m}_{ts}.xlsx"
-    # ✅ 버킷명 빼고, 버킷 내부 경로만
-    return f"{u}/{time.strftime('%Y')}/{time.strftime('%m')}/{fname}"
+    return f"{u}/{time.strftime('%Y')}/{time.strftime('%m')}/{fname}"  # 버킷명 X
+
 
 def upload_to_storage(file_bytes: bytes, username: str, meal_type: str) -> str:
     sb = get_supabase(version=st.secrets.get("SUPABASE_CLIENT_VERSION", "v1"))
@@ -67,17 +68,36 @@ def upload_to_storage(file_bytes: bytes, username: str, meal_type: str) -> str:
     bucket = st.secrets["SUPABASE_BUCKET"]  # 예: "submissions"
     path = _storage_path(username, meal_type)
 
-    sb.storage.from_(bucket).upload(
-        path=path,                      # 예: "SR12/2025/10/SR12_sikdanA_20251001-122941.xlsx"
-        file=BytesIO(file_bytes),       # ✅ 파일 객체
-        file_options={
-            "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "cacheControl": "3600",
-            "upsert": "true",
-        },
-    )
-    return path
+    # 서로 다른 supabase-py 버전 호환 (upsert 키가 다릅니다)
+    option_sets = [
+        {"contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+         "cacheControl": "3600", "upsert": "true"},
+        {"contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+         "cacheControl": "3600", "x-upsert": "true"},
+    ]
 
+    # 1) bytes로 시도
+    last_err = None
+    for opts in option_sets:
+        try:
+            sb.storage.from_(bucket).upload(path=path, file=file_bytes, file_options=opts)
+            return path
+        except Exception as e:
+            last_err = e
+
+    # 2) 경로 문자열 요구하는 구버전 대응: 임시 파일로 저장 후 경로 전달
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(file_bytes)
+        tmp.flush()
+        for opts in option_sets:
+            try:
+                sb.storage.from_(bucket).upload(path=path, file=tmp.name, file_options=opts)
+                return path
+            except Exception as e:
+                last_err = e
+
+    # 모두 실패 시 원인 표출
+    raise RuntimeError(f"storage upload failed: {last_err}")
 
 def insert_row_kor(username: str, started_at: datetime, submitted_at: datetime,
                    duration_sec: int, meal_type: str, storage_path: str, original_name: str):
