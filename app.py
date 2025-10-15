@@ -16,6 +16,17 @@ from zoneinfo import ZoneInfo
 # ===== Supabase helpers (ADD) ======================================
 from supabase import create_client, Client
 import time
+import base64, json
+
+def peek_role(jwt: str):
+    payload = jwt.split('.')[1]
+    payload += '=' * (-len(payload) % 4)  # padding
+    data = json.loads(base64.urlsafe_b64decode(payload))
+    return data.get("role"), data
+
+role, data = peek_role(st.secrets["SUPABASE_SERVICE_ROLE_KEY"])
+st.write("JWT role =", role)  # 반드시 service_role 이어야 함
+
 
 @st.cache_resource
 def get_supabase() -> Client | None:
@@ -23,6 +34,7 @@ def get_supabase() -> Client | None:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
         return create_client(url, key)
+sb = get_supabase(_ver=st.secrets.get("SUPABASE_CLIENT_VERSION", "v1"))  # secrets에서 값만 바꿔도 재생성
     except Exception:
         # Secrets 미설정 시 None 반환 → 자동 폴백
         return None
