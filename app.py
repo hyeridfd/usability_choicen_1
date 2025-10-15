@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import os
 import glob
-import base64
+import time
+import base64, json
 
 import os, base64
 import streamlit as st
@@ -12,32 +13,34 @@ import re, unicodedata, time
 
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from io import BytesIO
 
 # ===== Supabase helpers (ADD) ======================================
 from supabase import create_client, Client
-import time
-import base64, json
 
 def peek_role(jwt: str):
-    payload = jwt.split('.')[1]
-    payload += '=' * (-len(payload) % 4)  # padding
+    if not jwt or '.' not in jwt:
+        return None, {"error":"invalid jwt"}
+    payload = jwt.split('.')[1] + '=' * (-len(jwt.split('.')[1]) % 4)
     data = json.loads(base64.urlsafe_b64decode(payload))
     return data.get("role"), data
 
-role, data = peek_role(st.secrets["SUPABASE_SERVICE_ROLE_KEY"])
-st.write("JWT role =", role)  # 반드시 service_role 이어야 함
+role, _ = peek_role(st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+st.write("JWT role =", role)   # 👉 반드시 'service_role' 이어야 합니다
 
 
+# ✅ 캐시 무효화 가능한 버전 파라미터 추가
 @st.cache_resource
-def get_supabase() -> Client | None:
+def get_supabase(version: str = "v1") -> Client | None:
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
         return create_client(url, key)
     except Exception:
-        # Secrets 미설정 시 None 반환 → 자동 폴백
         return None
-sb = get_supabase(_ver=st.secrets.get("SUPABASE_CLIENT_VERSION", "v1"))  # secrets에서 값만 바꿔도 재생성
+
+# ✅ 새 키 반영하려면: secrets에서 버전만 바꿔주면 캐시가 재생성됨
+sb = get_supabase(version=st.secrets.get("SUPABASE_CLIENT_VERSION", "v1"))
 
 def _ascii_slug(s: str) -> str:
     # 한글/유니코드 제거 + 안전 문자만 남기기
@@ -49,33 +52,32 @@ def _ascii_slug(s: str) -> str:
     return s or "file"
 
 def _storage_path(username: str, meal_type: str) -> str:
-    u = _ascii_slug(username)           # ex) SR11
-    m = _ascii_slug(meal_type)          # ex) sikdanA  (식단표A → sikdanA 처럼 ASCII만 남음)
-    ts = time.strftime("%Y%m%d-%H%M%S") # ex) 20251001-122941
+    u = _ascii_slug(username)
+    m = _ascii_slug(meal_type)
+    ts = time.strftime("%Y%m%d-%H%M%S")
     fname = f"{u}_{m}_{ts}.xlsx"
-    # 절대 경로 금지, 슬래시/공백/백슬래시 없음 보장
-    return f"uploads/{u}/{time.strftime('%Y')}/{time.strftime('%m')}/{fname}"
-
+    # ✅ 버킷명 빼고, 버킷 내부 경로만
+    return f"{u}/{time.strftime('%Y')}/{time.strftime('%m')}/{fname}"
 
 def upload_to_storage(file_bytes: bytes, username: str, meal_type: str) -> str:
-    sb = get_supabase()
+    sb = get_supabase(version=st.secrets.get("SUPABASE_CLIENT_VERSION", "v1"))
     if sb is None:
         raise RuntimeError("Supabase client not configured")
 
-    bucket = st.secrets["SUPABASE_BUCKET"]
+    bucket = st.secrets["SUPABASE_BUCKET"]  # 예: "submissions"
     path = _storage_path(username, meal_type)
 
-    # ✅ 옵션 값을 문자열로, 키는 contentType / upsert 사용
     sb.storage.from_(bucket).upload(
-        path=path,
-        file=file_bytes,  # bytes 또는 파일 객체
+        path=path,                      # 예: "SR12/2025/10/SR12_sikdanA_20251001-122941.xlsx"
+        file=BytesIO(file_bytes),       # ✅ 파일 객체
         file_options={
             "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "cacheControl": "3600",
-            "upsert": "true"
-        }
+            "upsert": "true",
+        },
     )
     return path
+
 
 def insert_row_kor(username: str, started_at: datetime, submitted_at: datetime,
                    duration_sec: int, meal_type: str, storage_path: str, original_name: str):
