@@ -678,10 +678,10 @@ def get_template_file(meal_type: str) -> bytes | None:
 
     # 3) 로컬에 없으면 GitHub raw에서 다운로드
     #   ⚠️ 반드시 raw.githubusercontent.com 사용 (blob 아님)
-    github_raw_urls = {
-        "식단표A": "https://raw.githubusercontent.com/hyeridfd/usability_choicen/main/templates/%EC%8B%9D%EB%8B%A8%ED%91%9C%20A.xlsx",
-        "식단표B": "https://raw.githubusercontent.com/hyeridfd/usability_choicen/main/templates/%EC%8B%9D%EB%8B%A8%ED%91%9C%20B.xlsx",
-    }
+    # github_raw_urls = {
+    #     "식단표A": "https://raw.githubusercontent.com/hyeridfd/usability_choicen/main/templates/%EC%8B%9D%EB%8B%A8%ED%91%9C%20A.xlsx",
+    #     "식단표B": "https://raw.githubusercontent.com/hyeridfd/usability_choicen/main/templates/%EC%8B%9D%EB%8B%A8%ED%91%9C%20B.xlsx",
+    # }
     url = github_raw_urls.get(meal_type)
     if not url:
         return None
